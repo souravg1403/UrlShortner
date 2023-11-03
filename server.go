@@ -2,10 +2,9 @@ package main
 
 //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
 import (
-	"context"
+	"./UrlShortner/helpers"
 	"encoding/json"
 	"fmt"
-	"github.com/redis/go-redis/v9"
 	"log"
 	"math/rand"
 	"net/http"
@@ -49,38 +48,25 @@ func getRandomString() string {
 	return string(randomKey)
 }
 
-func (h *Handler) urlShortening(u URL) string {
-
-	//Connection creation with redis
-	ctx := context.TODO()
-	// fmt.Println(u)
-	// client := redis.NewClient(&redis.Options{
-	// 	Addr:     "localhost:6379",
-	// 	Password: "",
-	// 	DB:       0,
-	// })
-
+func (redis *RedisConnection) urlShortening(u URL) string {
 	randomKey := getRandomString()
-	check, _ := h.RedisClient.Exists(ctx, randomKey).Result()
-	for check == 1 {
+	check := redis.isExist(randomKey)
+	for check {
 		randomKey = getRandomString()
-		check, _ = h.RedisClient.Exists(ctx, randomKey).Result()
+		check = redis.isExist(randomKey)
 	}
 
-	fmt.Println(randomKey)
-
-	result := h.RedisClient.Set(ctx, randomKey, u.WebAddress, 0)
-	err := result.Err()
+	result, err := redis.setKey(randomKey, u.WebAddress, 0)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return "error"
+	} else {
+		fmt.Println(result)
+		return randomKey
 	}
-	return randomKey
 }
 
-// Handler function
-func (h *Handler) GetUrl(w http.ResponseWriter, r *http.Request) {
-
+func (redis *RedisConnection) GetUrl(w http.ResponseWriter, r *http.Request) {
 	var data URL
 	decoder := json.NewDecoder(r.Body)
 	myData := decoder.Decode(&data)
@@ -89,7 +75,7 @@ func (h *Handler) GetUrl(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(err)
 	}
 
-	value := h.urlShortening(data)
+	value := redis.urlShortening(data)
 	shortenedUrl := "http://localhost" + port + "/" + value
 	shorturl := shortURL{
 		ShortURL: shortenedUrl,
@@ -97,13 +83,9 @@ func (h *Handler) GetUrl(w http.ResponseWriter, r *http.Request) {
 
 	dataBody, _ := json.Marshal(shorturl)
 	w.Write(dataBody)
-
 }
 
-func (h *Handler) FetchUrl(w http.ResponseWriter, r *http.Request) {
-
-	//Connection creation with redis
-	ctx := context.TODO()
+func (redis *RedisConnection) FetchUrl(w http.ResponseWriter, r *http.Request) {
 
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) >= 2 {
@@ -111,36 +93,19 @@ func (h *Handler) FetchUrl(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(extractedPart)
 		fmt.Printf("type: %T", extractedPart)
 
-		searchKey := h.RedisClient.Get(ctx, extractedPart)
-		http.Redirect(w, r, searchKey.Val(), http.StatusFound)
+		value, err := redis.getValue(extractedPart)
+		if err != nil {
+			fmt.Println(err)
+		}
+		http.Redirect(w, r, value, http.StatusFound)
 	} else {
 		http.NotFound(w, r)
 	}
 }
 
-type Handler struct {
-	RedisClient *redis.Client
-}
-
-func NewHandler() Handler {
-	fmt.Println("########")
-
-	client := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       0,
-	})
-	handler := Handler{
-		RedisClient: client,
-	}
-
-	fmt.Printf("type: %T", client)
-	return handler
-}
-
 func main() {
 	var wg sync.WaitGroup
-	handler := NewHandler()
+	handler := RedisConnectionHandler()
 	wg.Add(1)
 	go func() {
 
@@ -163,5 +128,4 @@ func main() {
 	go servicesUp(&wg)
 
 	wg.Wait()
-
 }
